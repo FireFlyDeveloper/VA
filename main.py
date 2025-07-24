@@ -10,12 +10,17 @@ import io
 import time
 from gtts import gTTS
 import os
+import requests
+import json
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = FastAPI()
 
 # Initialize Porcupine wake word engine
 porcupine = pvporcupine.create(
-    access_key='PINE_CONE_API_KEY',
+    access_key=os.getenv("PORCUPINE_URL"),
     keyword_paths=['hey_ani.ppn']
 )
 
@@ -43,8 +48,8 @@ async def websocket_endpoint(websocket: WebSocket):
 
                     # Start dynamic recording
                     post_wake_audio = []
-                    silence_threshold = 1500
-                    silence_duration_limit = 5.0
+                    silence_threshold = int(os.getenv("silence_threshold"))
+                    silence_duration_limit = float(os.getenv("silence_duration_limit"))
                     silence_frame_count = int(SAMPLE_RATE / FRAME_LENGTH * silence_duration_limit)
                     silence_counter = 0
 
@@ -77,9 +82,21 @@ async def websocket_endpoint(websocket: WebSocket):
                     if transcript != "Could not understand audio":
                         print(f"Transcript: {transcript}")
                         await websocket.send_text(f"TRANSCRIPT: {transcript}")
-
+                        
+                        payload = {
+                            "transcription": transcript,
+                            "status": "success"
+                        }
+                        headers = {'Content-Type': 'application/json'}
+                        response = requests.post(
+                            os.getenv("WEBHOOK_URL"),
+                            data=json.dumps(payload),
+                            headers=headers
+                        )
+                        print(f"\nWebhook response: {response.status_code} - {response.text}")
+                        
                         # Generate TTS using gTTS
-                        audio_data = generate_tts(transcript)
+                        audio_data = generate_tts(response.text)
 
                         # Send audio data to frontend
                         await websocket.send_bytes(audio_data)

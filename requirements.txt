@@ -2,6 +2,8 @@ fastapi
 uvicorn
 pvporcupine
 numpy
-SpeechRecognition
-pydub
+speechrecognition
 gTTS
+pydub
+python-dotenv
+requests
