@@ -7,3 +7,4 @@ gTTS
 pydub
 python-dotenv
 requests
+websockets
