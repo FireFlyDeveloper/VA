@@ -8,14 +8,17 @@ import wave
 import speech_recognition as sr
 import io
 import time
+from gtts import gTTS
+import os
 
 app = FastAPI()
 
 # Initialize Porcupine wake word engine
 porcupine = pvporcupine.create(
-    access_key='YOUR_PINECONE_API_KEY',  # Replace with your real access key
+    access_key='PINE_CONE_API_KEY',
     keyword_paths=['hey_ani.ppn']
 )
+
 FRAME_LENGTH = porcupine.frame_length
 SAMPLE_RATE = porcupine.sample_rate
 
@@ -40,11 +43,11 @@ async def websocket_endpoint(websocket: WebSocket):
 
                     # Start dynamic recording
                     post_wake_audio = []
-                    silence_threshold = 800  # Amplitude threshold for silence
-                    silence_duration_limit = 5.0  # Seconds
+                    silence_threshold = 1500
+                    silence_duration_limit = 5.0
                     silence_frame_count = int(SAMPLE_RATE / FRAME_LENGTH * silence_duration_limit)
-
                     silence_counter = 0
+
                     print("Recording...")
 
                     while True:
@@ -61,17 +64,30 @@ async def websocket_endpoint(websocket: WebSocket):
                         if rms < silence_threshold:
                             silence_counter += 1
                         else:
-                            silence_counter = 0  # Reset on speech
+                            silence_counter = 0
 
                         if silence_counter >= silence_frame_count:
                             print("Silence detected, stopping recording.")
+                            await websocket.send_text("STOPPED")
                             break
 
                     # Transcribe speech
                     transcript = await transcribe_audio(post_wake_audio)
-                    print(f"Transcript: {transcript}")
-                    await websocket.send_text(f"TRANSCRIPT: {transcript}")
-                    
+
+                    if transcript != "Could not understand audio":
+                        print(f"Transcript: {transcript}")
+                        await websocket.send_text(f"TRANSCRIPT: {transcript}")
+
+                        # Generate TTS using gTTS
+                        audio_data = generate_tts(transcript)
+
+                        # Send audio data to frontend
+                        await websocket.send_bytes(audio_data)
+
+                    else:
+                        print("NO_TRANSCRIPT")
+                        await websocket.send_text("NO_TRANSCRIPT")
+
     except WebSocketDisconnect:
         print("Client disconnected")
     except Exception as e:
@@ -97,6 +113,28 @@ async def transcribe_audio(audio_data):
                 return "Could not understand audio"
             except sr.RequestError as e:
                 return f"Google API error: {e}"
+
+def generate_tts(text):
+    try:
+        # Create gTTS object
+        tts = gTTS(text=text, lang='en')
+        
+        # Save to bytes buffer
+        audio_buffer = io.BytesIO()
+        tts.write_to_fp(audio_buffer)
+        audio_buffer.seek(0)
+        
+        # Convert MP3 to WAV
+        from pydub import AudioSegment
+        sound = AudioSegment.from_mp3(audio_buffer)
+        
+        # Export as raw PCM data (what your frontend expects)
+        raw_data = sound.raw_data
+        
+        return raw_data
+    except Exception as e:
+        print(f"TTS generation error: {e}")
+        return b''
 
 if __name__ == "__main__":
     import uvicorn
