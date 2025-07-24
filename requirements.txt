@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+pvporcupine
+numpy
+SpeechRecognition
+pydub
