@@ -99,7 +99,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         await websocket.send_text(f"TRANSCRIPT: {transcript}")
 
                         payload = {"transcription": transcript, "status": "success"}
-                        headers = {'Content-Type': 'application/json'}
+                        headers = {'Content-Type': 'application/json', 'Authorization': os.getenv("WEBHOOK_AUTH")}
                         response = requests.post(
                             os.getenv("WEBHOOK_URL"),
                             data=json.dumps(payload),
