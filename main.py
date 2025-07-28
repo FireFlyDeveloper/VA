@@ -13,6 +13,7 @@ import os
 import requests
 import json
 from dotenv import load_dotenv
+import webrtcvad
 
 load_dotenv()
 
@@ -24,8 +25,15 @@ porcupine = pvporcupine.create(
     keyword_paths=['hey_ani.ppn']
 )
 
+SAMPLE_RATE = porcupine.sample_rate  # likely 16000
 FRAME_LENGTH = porcupine.frame_length
-SAMPLE_RATE = porcupine.sample_rate
+
+# Initialize WebRTC VAD
+vad = webrtcvad.Vad()
+vad.set_mode(3)  # 0-3 (3 = most aggressive, detects smallest speech)
+
+VAD_FRAME_MS = 30
+VAD_FRAME_SIZE = int(SAMPLE_RATE * VAD_FRAME_MS / 1000)  # 480 samples @ 16kHz
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -46,59 +54,61 @@ async def websocket_endpoint(websocket: WebSocket):
                     print("Wake word detected!")
                     await websocket.send_text("DETECTED")
 
-                    # Start dynamic recording
-                    post_wake_audio = []
-                    silence_threshold = int(os.getenv("silence_threshold"))
-                    silence_duration_limit = float(os.getenv("silence_duration_limit"))
-                    silence_frame_count = int(SAMPLE_RATE / FRAME_LENGTH * silence_duration_limit)
-                    silence_counter = 0
+                    # ---- Start VAD-based recording ----
+                    print("Recording (VAD-based)...")
 
-                    print("Recording...")
+                    post_wake_audio = []
+                    vad_buffer = []
+                    silence_counter = 0
+                    max_silence_frames = 15  # ~0.45s at 30ms frames
 
                     while True:
                         try:
                             data = await asyncio.wait_for(websocket.receive_bytes(), timeout=1.0)
                         except asyncio.TimeoutError:
-                            print("Timeout while waiting for audio. Ending recording.")
+                            print("Timeout waiting for audio. Stopping.")
                             break
 
                         chunk = struct.unpack(f'<{len(data)//2}h', data)
                         post_wake_audio.extend(chunk)
+                        vad_buffer.extend(chunk)
 
-                        rms = np.sqrt(np.mean(np.square(chunk)))
-                        if rms < silence_threshold:
-                            silence_counter += 1
+                        while len(vad_buffer) >= VAD_FRAME_SIZE:
+                            frame_samples = vad_buffer[:VAD_FRAME_SIZE]
+                            vad_buffer = vad_buffer[VAD_FRAME_SIZE:]
+
+                            frame_bytes = struct.pack(f"<{VAD_FRAME_SIZE}h", *frame_samples)
+                            if vad.is_speech(frame_bytes, SAMPLE_RATE):
+                                silence_counter = 0
+                            else:
+                                silence_counter += 1
+
+                            if silence_counter >= max_silence_frames:
+                                print("User stopped speaking. Ending recording.")
+                                await websocket.send_text("STOPPED")
+                                break
                         else:
-                            silence_counter = 0
+                            continue  # continue outer while if inner didn't break
+                        break  # break outer while
 
-                        if silence_counter >= silence_frame_count:
-                            print("Silence detected, stopping recording.")
-                            await websocket.send_text("STOPPED")
-                            break
-
-                    # Transcribe speech
+                    # ---- Transcribe ----
                     transcript = await transcribe_audio(post_wake_audio)
 
                     if transcript != "Could not understand audio":
                         print(f"Transcript: {transcript}")
                         await websocket.send_text(f"TRANSCRIPT: {transcript}")
-                        
-                        payload = {
-                            "transcription": transcript,
-                            "status": "success"
-                        }
+
+                        payload = {"transcription": transcript, "status": "success"}
                         headers = {'Content-Type': 'application/json'}
                         response = requests.post(
                             os.getenv("WEBHOOK_URL"),
                             data=json.dumps(payload),
                             headers=headers
                         )
-                        print(f"\nWebhook response: {response.status_code} - {response.text}")
-                        
-                        # Generate TTS using gTTS
-                        audio_data = generate_tts(response.text)
+                        print(f"Webhook response: {response.status_code} - {response.text}")
 
-                        # Send audio data to frontend
+                        # Generate TTS
+                        audio_data = generate_tts(response.text)
                         await websocket.send_bytes(audio_data)
 
                     else:
@@ -109,6 +119,7 @@ async def websocket_endpoint(websocket: WebSocket):
         print("Client disconnected")
     except Exception as e:
         print(f"Error: {e}")
+
 
 async def transcribe_audio(audio_data):
     audio_array = np.array(audio_data, dtype=np.int16)
@@ -131,27 +142,21 @@ async def transcribe_audio(audio_data):
             except sr.RequestError as e:
                 return f"Google API error: {e}"
 
+
 def generate_tts(text):
     try:
-        # Create gTTS object
         tts = gTTS(text=text, lang='en')
-        
-        # Save to bytes buffer
         audio_buffer = io.BytesIO()
         tts.write_to_fp(audio_buffer)
         audio_buffer.seek(0)
-        
-        # Convert MP3 to WAV
+
         from pydub import AudioSegment
         sound = AudioSegment.from_mp3(audio_buffer)
-        
-        # Export as raw PCM data (what your frontend expects)
-        raw_data = sound.raw_data
-        
-        return raw_data
+        return sound.raw_data
     except Exception as e:
         print(f"TTS generation error: {e}")
         return b''
+
 
 if __name__ == "__main__":
     import uvicorn

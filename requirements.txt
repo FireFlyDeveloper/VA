@@ -8,3 +8,5 @@ pydub
 python-dotenv
 requests
 websockets
+webrtcvad
+setuptools
