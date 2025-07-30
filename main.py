@@ -60,7 +60,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     post_wake_audio = []
                     vad_buffer = []
                     silence_counter = 0
-                    max_silence_frames = 15  # ~0.45s at 30ms frames
+                    max_silence_frames = 40  # ~0.45s at 30ms frames
 
                     while True:
                         try:
